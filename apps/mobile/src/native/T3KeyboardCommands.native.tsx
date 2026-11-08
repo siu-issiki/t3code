@@ -1,4 +1,4 @@
-import { requireNativeView } from "expo";
+import { requireNativeModule, requireNativeView } from "expo";
 import type { PropsWithChildren } from "react";
 import type { NativeSyntheticEvent, ViewProps } from "react-native";
 
@@ -12,6 +12,16 @@ interface NativeKeyboardCommandsProps extends ViewProps {
 }
 
 const NativeKeyboardCommands = requireNativeView<NativeKeyboardCommandsProps>("T3KeyboardCommands");
+
+export function isHardwareKeyboardConnected(): boolean {
+  try {
+    return requireNativeModule<{ isHardwareKeyboardConnected(): boolean }>(
+      "T3KeyboardCommands",
+    ).isHardwareKeyboardConnected();
+  } catch {
+    return false;
+  }
+}
 
 export function T3KeyboardCommands(
   props: PropsWithChildren<{

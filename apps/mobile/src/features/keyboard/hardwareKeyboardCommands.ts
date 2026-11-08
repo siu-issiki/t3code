@@ -8,6 +8,7 @@ export type HardwareKeyboardCommand =
   | "palettePrevious"
   | "paletteDismiss"
   | "newTask"
+  | "focusComposer"
   | "focusSearch"
   | "back"
   | "files"
@@ -20,6 +21,17 @@ export type HardwareKeyboardCommand =
 type CommandHandler = (command: HardwareKeyboardCommand) => boolean | void;
 
 const handlers = new Map<HardwareKeyboardCommand, Set<CommandHandler>>();
+// GameController can report no keyboard until it finishes discovery, so a received
+// hardware shortcut also proves a keyboard is attached for the rest of the session.
+let receivedHardwareKeyboardCommand = false;
+
+export function markHardwareKeyboardCommandReceived(): void {
+  receivedHardwareKeyboardCommand = true;
+}
+
+export function hasReceivedHardwareKeyboardCommand(): boolean {
+  return receivedHardwareKeyboardCommand;
+}
 const registrationListeners = new Set<() => void>();
 let registrationVersion = 0;
 

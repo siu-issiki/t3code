@@ -1,9 +1,20 @@
 import ExpoModulesCore
+import GameController
 import UIKit
 
 public final class T3KeyboardCommandsModule: Module {
   public func definition() -> ModuleDefinition {
     Name("T3KeyboardCommands")
+
+    // Observing keyboard connections starts GameController's discovery, so `coalesced`
+    // is populated by the time a thread switch asks for it.
+    OnCreate {
+      NotificationCenter.default.addObserver(forName: .GCKeyboardDidConnect, object: nil, queue: .main) { _ in }
+    }
+
+    Function("isHardwareKeyboardConnected") { () -> Bool in
+      GCKeyboard.coalesced != nil
+    }
 
     View(T3KeyboardCommandsView.self) {
       Prop("enabledCommands") { (view: T3KeyboardCommandsView, commands: [String]) in
@@ -45,9 +56,9 @@ public final class T3KeyboardCommandsView: ExpoView {
       enabledCommand("palettePrevious", input: UIKeyCommand.inputUpArrow, modifiers: [], action: #selector(palettePrevious), title: "Previous Result"),
       enabledCommand("paletteDismiss", input: UIKeyCommand.inputEscape, modifiers: [], action: #selector(paletteDismiss), title: "Close Command Palette"),
       enabledCommand("back", input: "[", modifiers: .command, action: #selector(goBack), title: "Back"),
-      enabledCommand("files", input: "f", modifiers: [.command, .shift], action: #selector(openFiles), title: "Open Files"),
-      enabledCommand("terminal", input: "t", modifiers: [.command, .shift], action: #selector(openTerminal), title: "Open Terminal"),
-      enabledCommand("review", input: "r", modifiers: [.command, .shift], action: #selector(openReview), title: "Open Review"),
+      enabledCommand("files", input: "p", modifiers: .command, action: #selector(openFiles), title: "Open Files"),
+      enabledCommand("terminal", input: "j", modifiers: .command, action: #selector(openTerminal), title: "Open Terminal"),
+      enabledCommand("review", input: "d", modifiers: .command, action: #selector(openReview), title: "Open Review"),
       enabledCommand(
         "copyThreadReference",
         input: "c",
@@ -55,9 +66,21 @@ public final class T3KeyboardCommandsView: ExpoView {
         action: #selector(copyThreadReference),
         title: "Copy PR Link or Thread"
       ),
-      enabledCommand("toggleSidebar", input: "\\", modifiers: .command, action: #selector(handleToggleSidebar), title: "Toggle Sidebar"),
+      enabledCommand("toggleSidebar", input: "b", modifiers: .command, action: #selector(handleToggleSidebar), title: "Toggle Sidebar"),
       enabledCommand("cycleHost", input: "h", modifiers: [.command, .shift], action: #selector(cycleHost), title: "Next Machine"),
     ].compactMap { $0 }
+    // Only while no view that accepts typing (text fields, the composer, the terminal) has focus,
+    // so "/" still types everywhere it should.
+    if !(window?.t3FirstResponder is UIKeyInput),
+       let focusComposer = enabledCommand(
+         "focusComposer",
+         input: "/",
+         modifiers: [],
+         action: #selector(focusComposer),
+         title: "Focus Message"
+       ) {
+      commands.append(focusComposer)
+    }
     if isPad {
       commands += (1...9).compactMap { index in
         enabledCommand(
@@ -142,6 +165,7 @@ public final class T3KeyboardCommandsView: ExpoView {
   }
 
   @objc private func newTask() { emit("newTask") }
+  @objc private func focusComposer() { emit("focusComposer") }
   @objc private func openCommandPalette() { emit("commandPalette") }
   @objc private func paletteNext() { emit("paletteNext") }
   @objc private func palettePrevious() { emit("palettePrevious") }

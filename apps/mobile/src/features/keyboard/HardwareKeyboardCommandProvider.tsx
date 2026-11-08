@@ -28,6 +28,7 @@ import {
   dispatchHardwareKeyboardCommand,
   getHardwareKeyboardCommandRegistrationVersion,
   getRegisteredHardwareKeyboardCommands,
+  markHardwareKeyboardCommandReceived,
   parseActiveThreadPath,
   subscribeToHardwareKeyboardCommandRegistrations,
   type HardwareKeyboardCommand,
@@ -118,6 +119,7 @@ export function HardwareKeyboardCommandProvider({
       commands.add("files");
       commands.add("terminal");
       commands.add("review");
+      commands.add("focusComposer");
       if (pathname.split("/")[4] !== "terminal") commands.add("copyThreadReference");
     }
     return [...commands];
@@ -126,6 +128,7 @@ export function HardwareKeyboardCommandProvider({
 
   const onCommand = useCallback(
     (command: HardwareKeyboardCommand) => {
+      markHardwareKeyboardCommandReceived();
       if (command === "commandPalette") {
         setPaletteOpen(true);
         return;
