@@ -1102,6 +1102,7 @@ it.effect.each(["none", "during", "after-fragment", "same-url"])(
               : "https://example.com/pending",
         });
         const viewer = yield* browser.attachViewer(viewerInput(tabId, true));
+        yield* viewer.input({ type: "takeControl" });
         yield* Effect.promise(() => started.promise);
         const page = contexts.at(-1)!.page;
         const request = {
@@ -3212,6 +3213,14 @@ it.effect(
         });
         const tabId = PreviewTabId.make(opened.tabId);
         const viewer = yield* browser.attachViewer(viewerInput(tabId, true));
+        // Watching a tab never claims it; a human drives only after asking to.
+        const watched = yield* broker.invoke<PreviewAutomationStatus>({
+          scope,
+          operation: "status",
+          input: {},
+        });
+        expect(watched.control).toMatchObject({ owner: "unclaimed", ownedByCaller: false });
+        yield* viewer.input({ type: "takeControl" });
         const status = yield* broker.invoke<PreviewAutomationStatus>({
           scope,
           operation: "status",

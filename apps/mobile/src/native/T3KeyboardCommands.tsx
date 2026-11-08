@@ -3,6 +3,10 @@ import { View } from "react-native";
 
 import type { HardwareKeyboardCommand } from "../features/keyboard/hardwareKeyboardCommands";
 
+export function isHardwareKeyboardConnected(): boolean {
+  return false;
+}
+
 export function T3KeyboardCommands(
   props: PropsWithChildren<{
     readonly enabledCommands: ReadonlyArray<HardwareKeyboardCommand>;

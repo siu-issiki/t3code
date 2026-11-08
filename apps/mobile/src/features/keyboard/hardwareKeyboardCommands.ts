@@ -1,25 +1,51 @@
 import { EnvironmentId, ThreadId, type ThreadJumpKeybindingCommand } from "@t3tools/contracts";
-import { useEffect } from "react";
+import { useEffect, useEffectEvent } from "react";
+
+export const USER_INPUT_OPTION_COMMANDS = [
+  "userInputOption.1",
+  "userInputOption.2",
+  "userInputOption.3",
+  "userInputOption.4",
+  "userInputOption.5",
+  "userInputOption.6",
+  "userInputOption.7",
+  "userInputOption.8",
+  "userInputOption.9",
+] as const;
 
 export type HardwareKeyboardCommand =
   | ThreadJumpKeybindingCommand
+  | (typeof USER_INPUT_OPTION_COMMANDS)[number]
   | "commandPalette"
   | "paletteNext"
   | "palettePrevious"
   | "paletteDismiss"
   | "newTask"
+  | "focusComposer"
   | "focusSearch"
   | "back"
   | "files"
   | "terminal"
   | "review"
   | "copyThreadReference"
+  | "settleThread"
   | "toggleSidebar"
   | "cycleHost";
 
 type CommandHandler = (command: HardwareKeyboardCommand) => boolean | void;
 
 const handlers = new Map<HardwareKeyboardCommand, Set<CommandHandler>>();
+// GameController can report no keyboard until it finishes discovery, so a received
+// hardware shortcut also proves a keyboard is attached for the rest of the session.
+let receivedHardwareKeyboardCommand = false;
+
+export function markHardwareKeyboardCommandReceived(): void {
+  receivedHardwareKeyboardCommand = true;
+}
+
+export function hasReceivedHardwareKeyboardCommand(): boolean {
+  return receivedHardwareKeyboardCommand;
+}
 const registrationListeners = new Set<() => void>();
 let registrationVersion = 0;
 
@@ -27,9 +53,14 @@ export function useHardwareKeyboardCommand(
   command: HardwareKeyboardCommand | ReadonlyArray<HardwareKeyboardCommand>,
   handler: CommandHandler,
 ): void {
+  // Callers pass fresh handlers and arrays each render; re-registering on every render would
+  // churn the native command list and drop the shortcut responder mid-keypress.
+  const onCommand = useEffectEvent(handler);
+  const commandKey = typeof command === "string" ? command : command.join(",");
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- registers the handler in the module-level hardware keyboard command registry
   useEffect(() => {
-    const commands = typeof command === "string" ? [command] : command;
+    const commands = commandKey === "" ? [] : (commandKey.split(",") as HardwareKeyboardCommand[]);
+    const handler: CommandHandler = (received) => onCommand(received);
     for (const command of commands) {
       const commandHandlers = handlers.get(command) ?? new Set<CommandHandler>();
       commandHandlers.add(handler);
@@ -46,7 +77,7 @@ export function useHardwareKeyboardCommand(
       registrationVersion += 1;
       registrationListeners.forEach((listener) => listener());
     };
-  }, [command, handler]);
+  }, [commandKey]);
 }
 
 export function getRegisteredHardwareKeyboardCommands(): ReadonlySet<HardwareKeyboardCommand> {

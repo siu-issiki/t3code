@@ -711,6 +711,26 @@ export function ThreadFileScreen(props: ThreadFileRouteScreenProps) {
         }
       : undefined;
   const mediaActions = useMediaActions(mediaSource);
+  // Text and other non-media files download as attachments, the way web saves them.
+  const downloadSource: MediaActionsSource | undefined =
+    mediaSource === undefined &&
+    environmentId !== null &&
+    threadId !== null &&
+    relativePath !== null &&
+    targetPath !== null &&
+    directoryPath === null &&
+    !metadataPending
+      ? {
+          name: basename(relativePath),
+          mimeType:
+            mediaMimeTypeFromExtension(relativePath.slice(relativePath.lastIndexOf("."))) ??
+            "application/octet-stream",
+          environmentId,
+          threadId,
+          resource: { _tag: "media-file", threadId, path: targetPath, disposition: "attachment" },
+        }
+      : undefined;
+  const downloadAction = useMediaActions(downloadSource).actions.find(({ id }) => id === "save");
   const videoSource: MediaVideoPreviewSource | null =
     environmentId !== null &&
     relativePath !== null &&
@@ -879,6 +899,15 @@ export function ThreadFileScreen(props: ThreadFileRouteScreenProps) {
                 ),
             } as const,
           ]),
+      downloadAction
+        ? ({
+            id: "save",
+            title: downloadAction.title,
+            icon: "square.and.arrow.up",
+            inline: false,
+            onPress: downloadAction.run,
+          } as const)
+        : null,
       fileData?.contents != null
         ? ({
             id: "copy-contents",

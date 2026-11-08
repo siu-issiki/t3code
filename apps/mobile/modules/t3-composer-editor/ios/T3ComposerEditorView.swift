@@ -101,7 +101,16 @@ private final class ComposerTextView: UITextView {
 
   override var keyCommands: [UIKeyCommand]? {
     var commands = super.keyCommands ?? []
-    guard !isReadOnly, markedTextRange == nil else { return commands }
+    guard markedTextRange == nil else { return commands }
+    let leaveInput = UIKeyCommand(
+      input: UIKeyCommand.inputEscape,
+      modifierFlags: [],
+      action: #selector(leaveInput(_:))
+    )
+    leaveInput.discoverabilityTitle = "Leave Message"
+    leaveInput.wantsPriorityOverSystemBehavior = true
+    commands.append(leaveInput)
+    guard !isReadOnly else { return commands }
     if enterBehavior == .send {
       let submitOnReturn = UIKeyCommand(
         input: "\r",
@@ -171,6 +180,11 @@ private final class ComposerTextView: UITextView {
     onSubmit?(true)
   }
 
+  @objc private func leaveInput(_ sender: UIKeyCommand) {
+    guard markedTextRange == nil else { return }
+    resignFirstResponder()
+  }
+
   @objc private func insertNewline(_ sender: UIKeyCommand) {
     guard !isReadOnly, markedTextRange == nil else { return }
     insertText("\n")
@@ -186,6 +200,9 @@ private final class ComposerTextView: UITextView {
   }
 
   override func canPerformAction(_ action: Selector, withSender sender: Any?) -> Bool {
+    if action == #selector(leaveInput(_:)) {
+      return markedTextRange == nil
+    }
     if action == #selector(submitMessage(_:)) || action == #selector(insertNewline(_:)) {
       return isEditable && !isReadOnly && markedTextRange == nil
     }

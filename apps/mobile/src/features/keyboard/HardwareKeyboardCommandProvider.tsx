@@ -15,6 +15,7 @@ import {
 } from "react";
 
 import { copyThreadReference } from "../../lib/copyThreadReference";
+import { useThreadListActions } from "../home/useThreadListActions";
 import {
   firstWorkspaceDetailOpen,
   workspaceHasColumns,
@@ -28,6 +29,7 @@ import {
   dispatchHardwareKeyboardCommand,
   getHardwareKeyboardCommandRegistrationVersion,
   getRegisteredHardwareKeyboardCommands,
+  markHardwareKeyboardCommandReceived,
   parseActiveThreadPath,
   subscribeToHardwareKeyboardCommandRegistrations,
   type HardwareKeyboardCommand,
@@ -57,6 +59,7 @@ export function HardwareKeyboardCommandProvider({
   const closePalette = useCallback(() => setPaletteOpen(false), []);
   const activeThreadRef = useMemo(() => parseActiveThreadPath(pathname), [pathname]);
   const activeThread = useThreadShell(activeThreadRef);
+  const { settleThread, unsettleThread } = useThreadListActions();
   const copyTarget = useMemo(
     () =>
       activeThreadRef === null
@@ -118,7 +121,11 @@ export function HardwareKeyboardCommandProvider({
       commands.add("files");
       commands.add("terminal");
       commands.add("review");
-      if (pathname.split("/")[4] !== "terminal") commands.add("copyThreadReference");
+      commands.add("focusComposer");
+      if (pathname.split("/")[4] !== "terminal") {
+        commands.add("copyThreadReference");
+        commands.add("settleThread");
+      }
     }
     return [...commands];
     // oxlint-disable-next-line react/memo-dependencies -- registrationVersion invalidates the snapshot of the external keyboard-command registry.
@@ -126,6 +133,7 @@ export function HardwareKeyboardCommandProvider({
 
   const onCommand = useCallback(
     (command: HardwareKeyboardCommand) => {
+      markHardwareKeyboardCommandReceived();
       if (command === "commandPalette") {
         setPaletteOpen(true);
         return;
@@ -151,6 +159,14 @@ export function HardwareKeyboardCommandProvider({
                 },
           );
         });
+        return;
+      }
+
+      if (command === "settleThread") {
+        if (activeThread === null) return;
+        void (activeThread.settledOverride === "settled" ? unsettleThread : settleThread)(
+          activeThread,
+        );
         return;
       }
 
@@ -182,7 +198,15 @@ export function HardwareKeyboardCommandProvider({
         navigation.navigate("ThreadReview", thread);
       }
     },
-    [copyTarget, navigation, pathname, showCopyFeedback],
+    [
+      activeThread,
+      copyTarget,
+      navigation,
+      pathname,
+      settleThread,
+      showCopyFeedback,
+      unsettleThread,
+    ],
   );
 
   const palette = useMemo(
