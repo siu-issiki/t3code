@@ -1,0 +1,43 @@
+lane :tf_internal do
+  require 'spaceship'
+  env_file = File.expand_path("../.env.ipad", __dir__)
+  File.readlines(env_file).each do |line|
+    next if line.strip.empty? || line.start_with?("#")
+    k, v = line.split("=", 2)
+    ENV[k.strip] ||= v.split(/\s+#/).first.strip.delete('"')
+  end if File.exist?(env_file)
+  user = ENV.fetch("ASC_APPLE_ID")
+  team_name = ENV.fetch("ASC_TEAM_NAME")
+  bundle_id = ENV.fetch("T3CODE_IOS_PERSONAL_TEAM_BUNDLE_ID")
+  tc = Spaceship::TunesClient.new
+  tc.user = user
+  UI.user_error!("saved session is not valid") unless tc.has_valid_session
+  teams = tc.teams
+  teams.each { |t| UI.message("team #{t['name']} #{t['providerId'] || t['contentProvider'].inspect[0,120]}") }
+  mine = teams.find { |t| (t['name'] || t.dig('contentProvider','name')).to_s.strip == team_name }
+  UI.user_error!("team not found") unless mine
+  tc.team_id = (mine['providerId'] || mine.dig('contentProvider','contentProviderId')).to_s
+  Spaceship::ConnectAPI.client = Spaceship::ConnectAPI::Client.new(tunes_client: tc)
+  app = Spaceship::ConnectAPI::App.find(bundle_id)
+  UI.user_error!("app not found") unless app
+  UI.message("app #{app.id} #{app.name}")
+  builds = app.get_builds rescue []
+  builds.each { |b| UI.message("build #{b.version} state=#{b.processing_state}") }
+  groups = app.get_beta_groups
+  groups.each { |g| UI.message("group #{g.name} internal=#{g.is_internal_group}") }
+  g = groups.find { |x| x.is_internal_group }
+  unless g
+    body = { data: { type: "betaGroups", attributes: { name: "Internal", isInternalGroup: true, hasAccessToAllBuilds: true }, relationships: { app: { data: { id: app.id, type: "apps" } } } } }
+    resp = Spaceship::ConnectAPI.client.test_flight_request_client.post("v1/betaGroups", body)
+    g = Spaceship::ConnectAPI::Models.parse(resp.body)
+    UI.message("created group #{g.name}")
+  end
+  me = Spaceship::ConnectAPI::User.find(email: user).first rescue nil
+  UI.user_error!("App Store Connect user #{user} not found") unless me
+  first = me.first_name
+  last = me.last_name
+  res = g.post_bulk_beta_tester_assignments(beta_testers: [{ email: user, firstName: first, lastName: last, errors: [] }])
+  UI.message("assign result: #{res.to_models.map { |m| m.respond_to?(:beta_testers) ? m.beta_testers : m }.inspect[0,600]}") rescue UI.message("assigned (result parse skipped)")
+  testers = Spaceship::ConnectAPI.get_beta_testers(filter: { betaGroups: g.id }).to_models rescue []
+  testers.each { |t| UI.message("tester in group: #{t.email} state=#{t.state rescue '?'}") }
+end
