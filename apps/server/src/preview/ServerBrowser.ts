@@ -3265,9 +3265,6 @@ const make = Effect.gen(function* () {
           reportLiveTabs();
         }),
     );
-    if (input.canOperate && tab.control.agentId === null && tab.control.controller === null) {
-      yield* Effect.promise(() => tab.control.take(viewer.id));
-    }
     broadcastControl(tab);
     pushFileChooser(tab);
     const pushStill = async () => {

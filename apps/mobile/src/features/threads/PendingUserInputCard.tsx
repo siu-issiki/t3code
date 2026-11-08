@@ -32,6 +32,11 @@ import {
 } from "../files/filePath";
 import { useLiveThreadLinkLabels } from "../../state/entities";
 import {
+  USER_INPUT_OPTION_COMMANDS,
+  useHardwareKeyboardCommand,
+} from "../keyboard/hardwareKeyboardCommands";
+import { userInputOptionTarget } from "../keyboard/threadKeyboardShortcuts";
+import {
   isPendingUserInputOptionSelected,
   type PendingUserInputDraftAnswer,
 } from "@t3tools/client-runtime/state/pending-user-input";
@@ -124,6 +129,16 @@ export function PendingUserInputCard(props: PendingUserInputCardProps) {
   const canRespond = props.pendingUserInput.responseCapability !== "not_resumable";
   const isResponding = props.respondingUserInputId === props.pendingUserInput.requestId;
   const responseDisabled = !canRespond || isResponding;
+  useHardwareKeyboardCommand(
+    responseDisabled || props.collapsed || !props.canOperateThread
+      ? []
+      : USER_INPUT_OPTION_COMMANDS,
+    (command) => {
+      const target = userInputOptionTarget(props.pendingUserInput.questions, props.drafts, command);
+      if (target === null) return;
+      props.onSelectOption(props.pendingUserInput.requestId, target.question, target.value);
+    },
+  );
   const setDirection = markdownProseDirection(
     props.pendingUserInput.questions
       .flatMap((question) => [

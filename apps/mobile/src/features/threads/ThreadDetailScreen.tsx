@@ -122,6 +122,11 @@ import {
   useWorkspaceSettledContentWidth,
 } from "../layout/workspace-content-width";
 import { useNativeWorkspaceColumnsSupported } from "../../native/NativeWorkspaceColumns";
+import { isHardwareKeyboardConnected } from "../../native/T3KeyboardCommands";
+import {
+  hasReceivedHardwareKeyboardCommand,
+  useHardwareKeyboardCommand,
+} from "../keyboard/hardwareKeyboardCommands";
 import { useDeviceType, useNativeColumnLayoutMetrics } from "../../native/native-layout-metrics";
 import { useAppearancePreferences } from "../settings/appearance/AppearancePreferencesProvider";
 import { collectProviderUsageLimits } from "@t3tools/shared/usageLimits";
@@ -508,6 +513,21 @@ function ThreadDetailBody(
     const frame = requestAnimationFrame(() => composerEditorRef.current?.focus());
     return () => cancelAnimationFrame(frame);
   }, [editingRunId, composerEditorRef]);
+  const canOperateThread = props.canOperateThread;
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- focuses the composer on the next animation frame after a thread switch (or the pane being shown) when a hardware keyboard is attached, so the soft keyboard never pops up
+  useEffect(() => {
+    if (Platform.OS !== "ios" || !canOperateThread || selectedThreadKey === "") return;
+    if (!isHardwareKeyboardConnected() && !hasReceivedHardwareKeyboardCommand()) return;
+    const frame = requestAnimationFrame(() => composerEditorRef.current?.focus());
+    return () => cancelAnimationFrame(frame);
+  }, [selectedThreadKey, canOperateThread, composerEditorRef]);
+  // "/" with nothing focused moves the keyboard into this thread's composer without typing it.
+  const focusComposerFromShortcut = () => {
+    if (!canOperateThread) return false;
+    composerEditorRef.current?.focus();
+    return true;
+  };
+  useHardwareKeyboardCommand("focusComposer", focusComposerFromShortcut);
   const listRef = useRef<LegendListRef>(null);
   const feedTouchStartRef = useRef<{ pageX: number; pageY: number } | null>(null);
   // Aborted when this thread's body unmounts, so async work started for it
