@@ -1,6 +1,14 @@
 import { StackActions, useNavigation } from "@react-navigation/native";
 import { Platform } from "react-native";
+import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
+import {
+  canSnooze,
+  resolveSnoozePresets,
+  type SnoozePreset,
+} from "@t3tools/client-runtime/state/thread-settled";
 import { resolveThreadReferenceCopyTarget } from "@t3tools/client-runtime/thread-reference";
+import { AuthOrchestrationOperateScope } from "@t3tools/contracts";
+import type { SnoozePresetSetting } from "@t3tools/contracts/settings";
 import {
   createContext,
   use,
@@ -14,6 +22,8 @@ import {
   type ReactNode,
 } from "react";
 
+import * as Dialog from "../../components/ui/Dialog";
+import { useNowAfter } from "../../lib/clock";
 import { copyThreadReference } from "../../lib/copyThreadReference";
 import { useThreadListActions } from "../home/useThreadListActions";
 import {
@@ -21,10 +31,17 @@ import {
   workspaceHasColumns,
 } from "../layout/workspace/workspace-selection-store";
 import { T3KeyboardCommands } from "../../native/T3KeyboardCommands";
-import { useThreadShell } from "../../state/entities";
+import { useServerConfigs, useThreadShell } from "../../state/entities";
+import { useEnvironmentScope } from "../../state/session";
 import type { GitActionProgress } from "../../state/use-vcs-action-state";
+import { CustomSnoozeSheet } from "../threads/CustomSnoozeSheet";
 import { GitActionProgressOverlay } from "../threads/GitActionProgressOverlay";
+import {
+  resolveThreadListV2SnoozeGateExpiryMs,
+  resolveThreadListV2SnoozeMenuSelection,
+} from "../threads/threadListV2";
 import { CommandPalette } from "./CommandPalette";
+import type { CommandPaletteItem } from "./commandPaletteItems";
 import {
   dispatchHardwareKeyboardCommand,
   getHardwareKeyboardCommandRegistrationVersion,
@@ -45,6 +62,12 @@ const COPY_FEEDBACK_DISMISS_MS = 3_000;
 
 const CommandPaletteContext = createContext<ReactNode>(null);
 
+interface SnoozeMenu {
+  readonly thread: EnvironmentThreadShell;
+  readonly shown: ReadonlyArray<SnoozePreset>;
+  readonly presets: ReadonlyArray<SnoozePresetSetting> | undefined;
+}
+
 /** Render inside the workspace so palette actions share its navigation and pane state. */
 export function HardwareKeyboardCommandOverlay() {
   return use(CommandPaletteContext);
@@ -56,10 +79,36 @@ export function HardwareKeyboardCommandProvider({
 }: PropsWithChildren<{ readonly pathname: string }>) {
   const navigation = useNavigation();
   const [paletteOpen, setPaletteOpen] = useState(false);
-  const closePalette = useCallback(() => setPaletteOpen(false), []);
+  const [snoozeMenu, setSnoozeMenu] = useState<SnoozeMenu | null>(null);
+  const [customSnoozeThread, setCustomSnoozeThread] = useState<EnvironmentThreadShell | null>(null);
+  const closePalette = useCallback(() => {
+    setPaletteOpen(false);
+    setSnoozeMenu(null);
+  }, []);
   const activeThreadRef = useMemo(() => parseActiveThreadPath(pathname), [pathname]);
   const activeThread = useThreadShell(activeThreadRef);
-  const { settleThread, unsettleThread } = useThreadListActions();
+  const { settleThread, snoozeThread, unsettleThread } = useThreadListActions();
+  const serverConfigs = useServerConfigs();
+  const canOperateActiveThread = useEnvironmentScope(
+    activeThreadRef?.environmentId ?? null,
+    AuthOrchestrationOperateScope,
+  );
+  const activeSnoozePresets =
+    activeThreadRef === null
+      ? undefined
+      : serverConfigs.get(activeThreadRef.environmentId)?.settings.snoozePresets;
+  const snoozeGateExpiryMs =
+    activeThread === null
+      ? null
+      : resolveThreadListV2SnoozeGateExpiryMs(activeThread, {
+          now: activeThread.latestUserMessageAt ?? "",
+        });
+  const snoozeGateNowMs = useNowAfter(snoozeGateExpiryMs === null ? null : snoozeGateExpiryMs + 1);
+  const canSnoozeActiveThread =
+    activeThread !== null &&
+    canOperateActiveThread &&
+    serverConfigs.has(activeThread.environmentId) &&
+    canSnooze(activeThread, { now: new Date(snoozeGateNowMs).toISOString() });
   const copyTarget = useMemo(
     () =>
       activeThreadRef === null
@@ -125,11 +174,12 @@ export function HardwareKeyboardCommandProvider({
       if (pathname.split("/")[4] !== "terminal") {
         commands.add("copyThreadReference");
         commands.add("settleThread");
+        if (canSnoozeActiveThread) commands.add("snoozeThread");
       }
     }
     return [...commands];
     // oxlint-disable-next-line react/memo-dependencies -- registrationVersion invalidates the snapshot of the external keyboard-command registry.
-  }, [activeThreadRef, pathname, registrationVersion, navigation]);
+  }, [activeThreadRef, canSnoozeActiveThread, pathname, registrationVersion, navigation]);
 
   const onCommand = useCallback(
     (command: HardwareKeyboardCommand) => {
@@ -170,6 +220,19 @@ export function HardwareKeyboardCommandProvider({
         return;
       }
 
+      if (command === "snoozeThread") {
+        if (activeThread === null) return;
+        setSnoozeMenu({
+          thread: activeThread,
+          shown: resolveSnoozePresets(
+            new Date(),
+            activeSnoozePresets ? { presets: activeSnoozePresets } : {},
+          ),
+          presets: activeSnoozePresets,
+        });
+        return;
+      }
+
       if (command === "newTask") {
         navigation.dispatch(selectWorkspaceDetail({ name: "Thread", params: { draft: {} } }));
         return;
@@ -199,6 +262,7 @@ export function HardwareKeyboardCommandProvider({
       }
     },
     [
+      activeSnoozePresets,
       activeThread,
       copyTarget,
       navigation,
@@ -209,12 +273,63 @@ export function HardwareKeyboardCommandProvider({
     ],
   );
 
+  const snoozeItems = useMemo<ReadonlyArray<CommandPaletteItem> | undefined>(() => {
+    if (snoozeMenu === null) return undefined;
+    const { thread, shown, presets } = snoozeMenu;
+    return [
+      ...shown.map((preset): CommandPaletteItem => ({
+        key: `snooze:${preset.id}`,
+        kind: "action",
+        title: preset.label,
+        detail: preset.whenLabel,
+        searchTerms: [preset.whenLabel],
+        run: () => {
+          const selection = resolveThreadListV2SnoozeMenuSelection({
+            event: `snooze:${preset.id}`,
+            displayedPresets: shown,
+            now: new Date(),
+            presets,
+          });
+          if (selection._tag === "selected") {
+            void snoozeThread(thread, selection.preset.snoozedUntil);
+          } else if (selection._tag === "expired") {
+            Dialog.alert(
+              "Could not snooze thread",
+              "That snooze time has passed. Choose another time.",
+            );
+          }
+        },
+      })),
+      {
+        key: "snooze:custom",
+        kind: "action",
+        title: "Custom…",
+        searchTerms: ["date", "time", "duration"],
+        run: () => setCustomSnoozeThread(thread),
+      },
+    ];
+  }, [snoozeMenu, snoozeThread]);
+
   const palette = useMemo(
-    () =>
-      paletteOpen ? (
-        <CommandPalette pathname={pathname} onClose={closePalette} onCommand={onCommand} />
-      ) : null,
-    [closePalette, onCommand, paletteOpen, pathname],
+    () => (
+      <>
+        {paletteOpen || snoozeItems ? (
+          <CommandPalette
+            pathname={pathname}
+            onClose={closePalette}
+            onCommand={onCommand}
+            snoozeItems={snoozeItems}
+          />
+        ) : null}
+        {customSnoozeThread ? (
+          <CustomSnoozeSheet
+            onClose={() => setCustomSnoozeThread(null)}
+            onSnooze={(snoozedUntil) => void snoozeThread(customSnoozeThread, snoozedUntil)}
+          />
+        ) : null}
+      </>
+    ),
+    [closePalette, customSnoozeThread, onCommand, paletteOpen, pathname, snoozeItems, snoozeThread],
   );
 
   return (

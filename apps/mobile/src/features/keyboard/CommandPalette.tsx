@@ -104,6 +104,7 @@ const ACTION_ICONS: Record<string, AppSymbolName> = {
 
 function itemIcon(item: CommandPaletteItem): AppSymbolName {
   if (item.kind === "thread") return "text.bubble";
+  if (item.key.startsWith("snooze:")) return "alarm";
   return ACTION_ICONS[item.key] ?? "ellipsis";
 }
 
@@ -221,6 +222,8 @@ export function CommandPalette(props: {
   readonly pathname: string;
   readonly onClose: () => void;
   readonly onCommand: (command: HardwareKeyboardCommand) => void;
+  /** Lists only these rows, as the snooze picker. */
+  readonly snoozeItems?: ReadonlyArray<CommandPaletteItem>;
 }) {
   const navigation = useNavigation();
   const selectTab = useSelectWorkspaceTab();
@@ -266,7 +269,7 @@ export function CommandPalette(props: {
         )
       : undefined;
   const search = useThreadSearch(
-    searchEnvironmentIds,
+    props.snoozeItems ? [] : searchEnvironmentIds,
     query.startsWith(">") ? "" : query,
     environmentLabels === undefined ? {} : { environmentLabels },
   );
@@ -292,6 +295,7 @@ export function CommandPalette(props: {
       .map((match) => [scopedThreadKey(match.environmentId, match.threadId), match]),
   );
   const items = useMemo(() => {
+    if (props.snoozeItems) return props.snoozeItems;
     const actions: CommandPaletteItem[] = [
       {
         key: "newTask",
@@ -472,6 +476,7 @@ export function CommandPalette(props: {
     );
     return [...actions, ...projectItems, ...threadItems];
   }, [
+    props.snoozeItems,
     selectTab,
     activeThread,
     activeThreadRef,
@@ -651,8 +656,16 @@ export function CommandPalette(props: {
                   />
                   <TextInput
                     ref={inputRef}
-                    accessibilityLabel="Search commands, projects, and threads"
-                    placeholder="Search commands, projects, and threads…"
+                    accessibilityLabel={
+                      props.snoozeItems
+                        ? "Snooze thread until"
+                        : "Search commands, projects, and threads"
+                    }
+                    placeholder={
+                      props.snoozeItems
+                        ? "Snooze until…"
+                        : "Search commands, projects, and threads…"
+                    }
                     placeholderTextColorClassName="accent-placeholder"
                     autoCorrect={false}
                     autoCapitalize="none"

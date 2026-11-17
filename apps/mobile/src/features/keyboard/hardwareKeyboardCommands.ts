@@ -29,6 +29,7 @@ export type HardwareKeyboardCommand =
   | "review"
   | "copyThreadReference"
   | "settleThread"
+  | "snoozeThread"
   | "toggleSidebar"
   | "cycleHost";
 

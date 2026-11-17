@@ -73,6 +73,7 @@ public final class T3KeyboardCommandsView: ExpoView {
         action: #selector(settleThread),
         title: "Settle or Un-settle Thread"
       ),
+      enabledCommand("snoozeThread", input: "s", modifiers: .command, action: #selector(snoozeThread), title: "Snooze Thread"),
       enabledCommand("toggleSidebar", input: "b", modifiers: .command, action: #selector(handleToggleSidebar), title: "Toggle Sidebar"),
       enabledCommand("cycleHost", input: "h", modifiers: [.command, .shift], action: #selector(cycleHost), title: "Next Machine"),
     ].compactMap { $0 }
@@ -213,6 +214,7 @@ public final class T3KeyboardCommandsView: ExpoView {
   @objc private func openReview() { emit("review") }
   @objc private func copyThreadReference() { emit("copyThreadReference") }
   @objc private func settleThread() { emit("settleThread") }
+  @objc private func snoozeThread() { emit("snoozeThread") }
   @objc private func handleToggleSidebar() { emit("toggleSidebar") }
   @objc private func cycleHost() { emit("cycleHost") }
 
