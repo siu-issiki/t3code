@@ -134,10 +134,15 @@ private final class TerminalInputField: UITextField {
   var onDeleteBackward: (() -> Void)?
   var onInsert: ((String) -> Void)?
   var onPaste: (() -> Void)?
+  var onCopy: (() -> Void)?
 
-  private static let hardwareKeyCommands = TerminalHardwareKeyEncoder.makeKeyCommands(
-    action: #selector(handleHardwareKeyCommand(_:))
-  )
+  private static let hardwareKeyCommands: [UIKeyCommand] = {
+    let copy = UIKeyCommand(input: "c", modifierFlags: .command, action: #selector(handleCopyKeyCommand))
+    copy.wantsPriorityOverSystemBehavior = true
+    return TerminalHardwareKeyEncoder.makeKeyCommands(
+      action: #selector(handleHardwareKeyCommand(_:))
+    ) + [copy]
+  }()
 
   // While an IME composes, arrows, Tab and Escape pick or cancel candidates instead.
   override var keyCommands: [UIKeyCommand]? {
@@ -170,6 +175,11 @@ private final class TerminalInputField: UITextField {
       modifiers: command.modifierFlags
     ) else { return }
     onInsert?(sequence)
+  }
+
+  @objc
+  private func handleCopyKeyCommand() {
+    onCopy?()
   }
 }
 
@@ -204,16 +214,29 @@ private extension UIColor {
   }
 }
 
-public final class T3TerminalView: ExpoView, UITextFieldDelegate, UIEditMenuInteractionDelegate {
+public final class T3TerminalView: ExpoView, UITextFieldDelegate, UIEditMenuInteractionDelegate,
+  UIGestureRecognizerDelegate
+{
   private static let minimumVerticalScrollStepPoints: CGFloat = 18
   private static let verticalScrollStepMultiplier: CGFloat = 1.15
+  private static let directTouchTypes = [UITouch.TouchType.direct.rawValue as NSNumber]
+  private static let pointerTouchTypes = [UITouch.TouchType.indirectPointer.rawValue as NSNumber]
 
   private let terminalViewport = UIView()
   private let inputField = TerminalInputField()
   private let focusTapGesture = UITapGestureRecognizer()
   private let scrollPanGesture = UIPanGestureRecognizer()
+  private let pointerScrollGesture = UIPanGestureRecognizer()
   private let editMenuGesture = UILongPressGestureRecognizer()
+  private let pointerPressGesture = UILongPressGestureRecognizer()
+  private let pointerMenuGesture = UITapGestureRecognizer()
+  private let pointerHoverGesture = UIHoverGestureRecognizer()
+  private let selectionFeedback = UISelectionFeedbackGenerator()
   private lazy var editMenuInteraction = UIEditMenuInteraction(delegate: self)
+  private var isPointerPressed = false
+  private var touchSelectionMods = GHOSTTY_MODS_NONE
+  // Set synchronously by ghostty's mouse_over_link action while mouse_pos runs.
+  private var hoveredLink: String?
   private var lastViewportSize: CGSize = .zero
   private var lastContentScale: CGFloat = 0
   private var lastReportedGrid: (cols: Int, rows: Int)?
@@ -387,15 +410,38 @@ public final class T3TerminalView: ExpoView, UITextFieldDelegate, UIEditMenuInte
     inputField.onPaste = { [weak self] in
       self?.emitPaste()
     }
+    inputField.onCopy = { [weak self] in
+      self?.copySelection()
+    }
 
-    focusTapGesture.addTarget(self, action: #selector(handleViewportTap))
+    focusTapGesture.addTarget(self, action: #selector(handleViewportTap(_:)))
+    focusTapGesture.allowedTouchTypes = Self.directTouchTypes
     terminalViewport.addGestureRecognizer(focusTapGesture)
     scrollPanGesture.addTarget(self, action: #selector(handleViewportPan(_:)))
     scrollPanGesture.maximumNumberOfTouches = 1
     scrollPanGesture.cancelsTouchesInView = false
+    scrollPanGesture.allowedTouchTypes = Self.directTouchTypes
     terminalViewport.addGestureRecognizer(scrollPanGesture)
+    // No touch types: only trackpad and mouse wheel scrolling reach this pan.
+    pointerScrollGesture.addTarget(self, action: #selector(handleViewportPan(_:)))
+    pointerScrollGesture.allowedScrollTypesMask = .all
+    pointerScrollGesture.allowedTouchTypes = []
+    terminalViewport.addGestureRecognizer(pointerScrollGesture)
     editMenuGesture.addTarget(self, action: #selector(handleViewportLongPress(_:)))
+    editMenuGesture.allowedTouchTypes = Self.directTouchTypes
     terminalViewport.addGestureRecognizer(editMenuGesture)
+    pointerPressGesture.addTarget(self, action: #selector(handlePointerPress(_:)))
+    pointerPressGesture.minimumPressDuration = 0
+    pointerPressGesture.allowedTouchTypes = Self.pointerTouchTypes
+    pointerPressGesture.delegate = self
+    terminalViewport.addGestureRecognizer(pointerPressGesture)
+    pointerMenuGesture.addTarget(self, action: #selector(handlePointerMenu(_:)))
+    pointerMenuGesture.buttonMaskRequired = .secondary
+    pointerMenuGesture.allowedTouchTypes = Self.pointerTouchTypes
+    terminalViewport.addGestureRecognizer(pointerMenuGesture)
+    pointerHoverGesture.addTarget(self, action: #selector(handlePointerHover(_:)))
+    pointerHoverGesture.delegate = self
+    terminalViewport.addGestureRecognizer(pointerHoverGesture)
     terminalViewport.addInteraction(editMenuInteraction)
     focusTapGesture.require(toFail: editMenuGesture)
 
@@ -455,8 +501,139 @@ public final class T3TerminalView: ExpoView, UITextFieldDelegate, UIEditMenuInte
   }
 
   @objc
-  private func handleViewportTap() {
+  private func handleViewportTap(_ gesture: UITapGestureRecognizer) {
     requestKeyboardFocus()
+    let point = gesture.location(in: terminalViewport)
+    guard !openLink(at: point) else { return }
+    clearSelection(at: point)
+  }
+
+  // Ghostty has no unselect action; a plain click clears it. Under a mouse-reporting TUI that
+  // click would reach the program, so the selection stays until the next one replaces it.
+  private func clearSelection(at point: CGPoint) {
+    guard let surface, ghostty_surface_has_selection(surface),
+      !ghostty_surface_mouse_captured(surface)
+    else { return }
+    sendMousePosition(point)
+    sendMouseButton(GHOSTTY_MOUSE_PRESS, mods: GHOSTTY_MODS_NONE)
+    sendMouseButton(GHOSTTY_MOUSE_RELEASE, mods: GHOSTTY_MODS_NONE)
+    clearMousePosition()
+    redrawSurface()
+  }
+
+  // Opens the link ghostty reports under the point instead of clicking, so a tap never
+  // reaches a mouse-reporting TUI. Shift lets ghostty look for links while one captures it.
+  @discardableResult
+  private func openLink(at point: CGPoint) -> Bool {
+    guard let surface else { return false }
+    var mods = GHOSTTY_MODS_SUPER.rawValue
+    if ghostty_surface_mouse_captured(surface) {
+      mods |= GHOSTTY_MODS_SHIFT.rawValue
+    }
+    hoveredLink = nil
+    moveMouseRefreshingLinks(to: point, mods: ghostty_input_mods_e(rawValue: mods))
+    let link = hoveredLink
+    clearMousePosition()
+    guard let link else { return false }
+    openURL(link)
+    return true
+  }
+
+  private func openURL(_ string: String) {
+    // OSC 8 links can carry any scheme.
+    guard let url = URL(string: string), let scheme = url.scheme?.lowercased(),
+      scheme == "http" || scheme == "https"
+    else { return }
+    UIApplication.shared.open(url)
+  }
+
+  // Ghostty applies the content scale to mouse positions itself.
+  private func sendMousePosition(_ point: CGPoint, mods: ghostty_input_mods_e = GHOSTTY_MODS_NONE) {
+    guard let surface else { return }
+    ghostty_surface_mouse_pos(surface, Double(point.x), Double(point.y), mods)
+  }
+
+  private func clearMousePosition() {
+    sendMousePosition(CGPoint(x: -1, y: -1))
+  }
+
+  // Ghostty ignores moves under a pixel and rechecks links only when the cell changes,
+  // so leave the viewport first to pick up new modifiers at the same point.
+  private func moveMouseRefreshingLinks(to point: CGPoint, mods: ghostty_input_mods_e) {
+    clearMousePosition()
+    sendMousePosition(point, mods: mods)
+  }
+
+  private func sendMouseButton(_ state: ghostty_input_mouse_state_e, mods: ghostty_input_mods_e) {
+    guard let surface else { return }
+    _ = ghostty_surface_mouse_button(surface, state, GHOSTTY_MOUSE_LEFT, mods)
+  }
+
+  private static func ghosttyMods(_ flags: UIKeyModifierFlags) -> ghostty_input_mods_e {
+    var mods = GHOSTTY_MODS_NONE.rawValue
+    if flags.contains(.shift) { mods |= GHOSTTY_MODS_SHIFT.rawValue }
+    if flags.contains(.control) { mods |= GHOSTTY_MODS_CTRL.rawValue }
+    if flags.contains(.alternate) { mods |= GHOSTTY_MODS_ALT.rawValue }
+    if flags.contains(.command) { mods |= GHOSTTY_MODS_SUPER.rawValue }
+    return ghostty_input_mods_e(rawValue: mods)
+  }
+
+  @objc
+  private func handlePointerPress(_ gesture: UILongPressGestureRecognizer) {
+    let point = gesture.location(in: terminalViewport)
+    let mods = Self.ghosttyMods(gesture.modifierFlags)
+    switch gesture.state {
+    case .began:
+      requestKeyboardFocus()
+      isPointerPressed = true
+      moveMouseRefreshingLinks(to: point, mods: mods)
+      sendMouseButton(GHOSTTY_MOUSE_PRESS, mods: mods)
+    case .changed:
+      guard isPointerPressed else { return }
+      sendMousePosition(point, mods: mods)
+    case .ended, .cancelled:
+      guard isPointerPressed else { return }
+      isPointerPressed = false
+      sendMousePosition(point, mods: mods)
+      sendMouseButton(GHOSTTY_MOUSE_RELEASE, mods: mods)
+    default:
+      return
+    }
+    redrawSurface()
+  }
+
+  @objc
+  private func handlePointerMenu(_ gesture: UITapGestureRecognizer) {
+    presentEditMenu(at: gesture.location(in: terminalViewport))
+  }
+
+  @objc
+  private func handlePointerHover(_ gesture: UIHoverGestureRecognizer) {
+    guard surface != nil, !isPointerPressed else { return }
+    let previousLink = hoveredLink
+    switch gesture.state {
+    case .began, .changed:
+      sendMousePosition(
+        gesture.location(in: terminalViewport), mods: Self.ghosttyMods(gesture.modifierFlags))
+    case .ended, .cancelled:
+      clearMousePosition()
+    default:
+      return
+    }
+    if hoveredLink != previousLink {
+      redrawSurface()
+    }
+  }
+
+  public func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldReceive event: UIEvent) -> Bool {
+    gestureRecognizer !== pointerPressGesture || event.buttonMask.contains(.primary)
+  }
+
+  public func gestureRecognizer(
+    _ gestureRecognizer: UIGestureRecognizer,
+    shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer
+  ) -> Bool {
+    gestureRecognizer === pointerHoverGesture || otherGestureRecognizer === pointerHoverGesture
   }
 
   private func readViewportText() -> String? {
@@ -468,25 +645,40 @@ public final class T3TerminalView: ExpoView, UITextFieldDelegate, UIEditMenuInte
     var captured = ghostty_text_s()
     guard ghostty_surface_read_text(surface, selection, &captured) else { return nil }
     defer { ghostty_surface_free_text(surface, &captured) }
-    guard let text = captured.text else { return nil }
+    return Self.decode(captured)
+  }
+
+  private func readSelectionText() -> String? {
+    guard let surface, ghostty_surface_has_selection(surface) else { return nil }
+    var captured = ghostty_text_s()
+    guard ghostty_surface_read_selection(surface, &captured) else { return nil }
+    defer { ghostty_surface_free_text(surface, &captured) }
+    return Self.decode(captured)
+  }
+
+  private static func decode(_ captured: ghostty_text_s) -> String? {
+    string(captured.text, length: Int(captured.text_len))
+  }
+
+  fileprivate static func string(_ pointer: UnsafePointer<CChar>?, length: Int) -> String? {
+    guard let pointer else { return nil }
     return String(
       bytes: UnsafeBufferPointer(
-        start: UnsafeRawPointer(text).assumingMemoryBound(to: UInt8.self),
-        count: Int(captured.text_len)),
+        start: UnsafeRawPointer(pointer).assumingMemoryBound(to: UInt8.self),
+        count: length),
       encoding: .utf8)
+  }
+
+  private func copySelection() {
+    guard let text = readSelectionText(), !text.isEmpty else { return }
+    UIPasteboard.general.string = text
   }
 
   @objc
   private func handleViewportPan(_ gesture: UIPanGestureRecognizer) {
     guard let surface else { return }
 
-    let location = gesture.location(in: terminalViewport)
-    ghostty_surface_mouse_pos(
-      surface,
-      Double(location.x * contentScaleFactor),
-      Double(location.y * contentScaleFactor),
-      GHOSTTY_MODS_NONE
-    )
+    sendMousePosition(gesture.location(in: terminalViewport))
 
     switch gesture.state {
     case .began:
@@ -542,15 +734,46 @@ public final class T3TerminalView: ExpoView, UITextFieldDelegate, UIEditMenuInte
     }
   }
 
+  // A double click under the finger selects the word, and dragging extends it by word.
+  // Shift keeps the clicks from a mouse-reporting TUI, but with a selection already
+  // there ghostty treats a shift press as extending it.
   @objc
   private func handleViewportLongPress(_ gesture: UILongPressGestureRecognizer) {
-    guard gesture.state == .began else { return }
+    let point = gesture.location(in: terminalViewport)
+    switch gesture.state {
+    case .began:
+      guard let surface else { return }
+      selectionFeedback.selectionChanged()
+      touchSelectionMods = ghostty_surface_mouse_captured(surface) ? GHOSTTY_MODS_SHIFT : GHOSTTY_MODS_NONE
+      moveMouseRefreshingLinks(to: point, mods: touchSelectionMods)
+      sendMouseButton(GHOSTTY_MOUSE_PRESS, mods: touchSelectionMods)
+      sendMouseButton(GHOSTTY_MOUSE_RELEASE, mods: touchSelectionMods)
+      sendMouseButton(GHOSTTY_MOUSE_PRESS, mods: touchSelectionMods)
+      redrawSurface()
+    case .changed:
+      sendMousePosition(point, mods: touchSelectionMods)
+      redrawSurface()
+    case .ended, .cancelled:
+      sendMousePosition(point, mods: touchSelectionMods)
+      sendMouseButton(GHOSTTY_MOUSE_RELEASE, mods: touchSelectionMods)
+      redrawSurface()
+      if gesture.state == .ended {
+        presentEditMenu(at: point)
+      }
+    default:
+      return
+    }
+  }
+
+  private func presentEditMenu(at point: CGPoint) {
     // Freeze the text the user pressed on; output keeps streaming while the menu is open.
     menuText = readViewportText().flatMap { $0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : $0 }
-    guard menuText != nil || canPaste else { return }
-    editMenuInteraction.presentEditMenu(
-      with: UIEditMenuConfiguration(identifier: nil, sourcePoint: gesture.location(in: terminalViewport))
-    )
+    guard menuText != nil || canPaste || hasSelection else { return }
+    editMenuInteraction.presentEditMenu(with: UIEditMenuConfiguration(identifier: nil, sourcePoint: point))
+  }
+
+  private var hasSelection: Bool {
+    surface.map { ghostty_surface_has_selection($0) } ?? false
   }
 
   public func editMenuInteraction(
@@ -560,7 +783,16 @@ public final class T3TerminalView: ExpoView, UITextFieldDelegate, UIEditMenuInte
   ) -> UIMenu? {
     // The hidden input field would otherwise add actions such as Scan Text or Writing Tools.
     // Keep the system Paste command: unlike a custom action, it reads without a paste prompt.
-    var children: [UIMenuElement] = Self.pasteCommand(in: suggestedActions).map { [$0] } ?? []
+    var children: [UIMenuElement] = []
+    if hasSelection {
+      children.append(
+        UIAction(title: "Copy", image: UIImage(systemName: "doc.on.doc")) { [weak self] _ in
+          self?.copySelection()
+        })
+    }
+    if let paste = Self.pasteCommand(in: suggestedActions) {
+      children.append(paste)
+    }
     if let text = menuText {
       children.append(
         UIAction(title: "Select Text", image: UIImage(systemName: "text.cursor")) { [weak self] _ in
@@ -652,7 +884,28 @@ public final class T3TerminalView: ExpoView, UITextFieldDelegate, UIEditMenuInte
         let ref = Unmanaged<TerminalViewRef>.fromOpaque(userdata).takeUnretainedValue()
         DispatchQueue.main.async { ref.view?.tickApp() }
       },
-      action_cb: { _, _, _ in false },
+      action_cb: { app, _, action in
+        guard let app, let userdata = ghostty_app_userdata(app) else { return false }
+        let ref = Unmanaged<TerminalViewRef>.fromOpaque(userdata).takeUnretainedValue()
+        switch action.tag {
+        case GHOSTTY_ACTION_OPEN_URL:
+          let payload = action.action.open_url
+          if let url = T3TerminalView.string(payload.url, length: Int(payload.len)) {
+            DispatchQueue.main.async { ref.view?.openURL(url) }
+          }
+          // Refused URLs count as handled too, or ghostty falls back to its own opener.
+          return true
+        case GHOSTTY_ACTION_MOUSE_OVER_LINK:
+          // Mouse moves run on main, and openLink reads this right after one returns.
+          guard Thread.isMainThread else { return false }
+          let payload = action.action.mouse_over_link
+          let url = T3TerminalView.string(payload.url, length: Int(payload.len))
+          ref.view?.hoveredLink = url?.isEmpty == false ? url : nil
+          return true
+        default:
+          return false
+        }
+      },
       read_clipboard_cb: { _, _, _, _, _, _ in GHOSTTY_CLIPBOARD_READ_UNSUPPORTED },
       confirm_read_clipboard_cb: { _, _, _, _ in },
       write_clipboard_cb: { _, _, _, _, _ in },

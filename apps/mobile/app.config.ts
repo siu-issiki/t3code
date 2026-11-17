@@ -280,6 +280,9 @@ const config: ExpoConfig = {
       NSPhotoLibraryAddUsageDescription: "Allow T3 Code to save images to your photo library.",
       // System picture in picture needs background audio to start and survive outside the app.
       UIBackgroundModes: ["audio"],
+      // Without it iPadOS reports mouse and trackpad clicks as finger touches, so the terminal
+      // cannot tell a click-drag selection from a scroll.
+      UIApplicationSupportsIndirectInputEvents: true,
       ITSAppUsesNonExemptEncryption: false,
       // Capture builds disable multitasking because iPadOS otherwise ignores orientation requests.
       ...(process.env.T3_SHOWCASE_CAPTURE_BUILD === "1"
