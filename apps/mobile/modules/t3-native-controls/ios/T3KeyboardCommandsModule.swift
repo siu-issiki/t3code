@@ -76,10 +76,21 @@ public final class T3KeyboardCommandsView: ExpoView {
       enabledCommand("snoozeThread", input: "s", modifiers: .command, action: #selector(snoozeThread), title: "Snooze Thread"),
       enabledCommand("toggleSidebar", input: "b", modifiers: .command, action: #selector(handleToggleSidebar), title: "Toggle Sidebar"),
       enabledCommand("cycleHost", input: "h", modifiers: [.command, .shift], action: #selector(cycleHost), title: "Next Machine"),
+      enabledCommand("userInputSubmit", input: "\r", modifiers: .command, action: #selector(submitUserInput), title: "Submit Answers"),
     ].compactMap { $0 }
     // Only while no view that accepts typing (text fields, the composer, the terminal) has focus,
-    // so "/" and digits still type everywhere they should.
+    // so "/", Tab and digits still type everywhere they should.
     if !(window?.t3FirstResponder is UIKeyInput) {
+      commands += [
+        enabledCommand("userInputNextQuestion", input: "\t", modifiers: [], action: #selector(nextUserInputQuestion), title: "Next Question"),
+        enabledCommand(
+          "userInputPreviousQuestion",
+          input: "\t",
+          modifiers: .shift,
+          action: #selector(previousUserInputQuestion),
+          title: "Previous Question"
+        ),
+      ].compactMap { $0 }
       if let focusComposer = enabledCommand(
         "focusComposer",
         input: "/",
@@ -207,6 +218,9 @@ public final class T3KeyboardCommandsView: ExpoView {
     guard let input = sender.input else { return }
     emit("userInputOption.\(input)")
   }
+  @objc private func submitUserInput() { emit("userInputSubmit") }
+  @objc private func nextUserInputQuestion() { emit("userInputNextQuestion") }
+  @objc private func previousUserInputQuestion() { emit("userInputPreviousQuestion") }
   @objc private func focusSearch() { emit("focusSearch") }
   @objc private func goBack() { emit("back") }
   @objc private func openFiles() { emit("files") }

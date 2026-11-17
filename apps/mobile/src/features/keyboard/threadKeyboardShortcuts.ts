@@ -44,19 +44,48 @@ export function useThreadJumpShortcuts(
   useHardwareKeyboardCommand(THREAD_JUMP_KEYBINDING_COMMANDS, jumpToThread);
 }
 
-/** Digit N answers the first unanswered question, or the last one once all are answered. */
+/** The question on screen: the one the user moved to, else the first unanswered, else the last. */
+export function activeUserInputQuestion(
+  questions: ReadonlyArray<ThreadUserInputQuestion>,
+  drafts: Readonly<Record<string, PendingUserInputDraftAnswer>>,
+  activeQuestionId: string | null,
+) {
+  return (
+    questions.find((candidate) => candidate.id === activeQuestionId) ??
+    questions.find(
+      (candidate) => resolvePendingUserInputAnswer(candidate, drafts[candidate.id]) === null,
+    ) ??
+    questions.at(-1)
+  );
+}
+
+/** Digit N picks option N of the active question. */
 export function userInputOptionTarget(
   questions: ReadonlyArray<ThreadUserInputQuestion>,
   drafts: Readonly<Record<string, PendingUserInputDraftAnswer>>,
+  activeQuestionId: string | null,
   command: HardwareKeyboardCommand,
 ) {
   const index = USER_INPUT_OPTION_COMMANDS.findIndex((candidate) => candidate === command);
   if (index < 0) return null;
-  const question =
-    questions.find(
-      (candidate) => resolvePendingUserInputAnswer(candidate, drafts[candidate.id]) === null,
-    ) ?? questions.at(-1);
+  const question = activeUserInputQuestion(questions, drafts, activeQuestionId);
   const option = question?.options[index];
   if (!question || !option) return null;
   return { question, value: option.value ?? option.label.trim() };
+}
+
+/** The next unanswered question after this one, wrapping, else this one. */
+export function nextUnansweredUserInputQuestion(
+  questions: ReadonlyArray<ThreadUserInputQuestion>,
+  drafts: Readonly<Record<string, PendingUserInputDraftAnswer>>,
+  questionId: string,
+): string {
+  const index = questions.findIndex((candidate) => candidate.id === questionId);
+  for (let offset = 1; offset < questions.length; offset += 1) {
+    const candidate = questions[(index + offset) % questions.length];
+    if (candidate && resolvePendingUserInputAnswer(candidate, drafts[candidate.id]) === null) {
+      return candidate.id;
+    }
+  }
+  return questionId;
 }
