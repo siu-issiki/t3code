@@ -57,6 +57,7 @@ import {
   stepTerminalFontSize,
 } from "../../lib/appearancePreferences";
 import { useAppearancePreferences } from "../settings/appearance/AppearancePreferencesProvider";
+import { useHardwareKeyboardCommand } from "../keyboard/hardwareKeyboardCommands";
 import {
   useAttachedTerminalSession,
   useKnownTerminalSessions,
@@ -702,6 +703,11 @@ function ThreadTerminal(props: {
       }),
     );
   };
+  // Stacked screens stay mounted, so only the visible terminal answers ⌘J.
+  useHardwareKeyboardCommand("terminal", () => {
+    if (!navigation.isFocused()) return false;
+    handleCloseTerminal();
+  });
 
   const handleOpenNewTerminal = () => {
     if (!readEnvironmentScope(selectedThread.environmentId, AuthTerminalOperateScope)) {
