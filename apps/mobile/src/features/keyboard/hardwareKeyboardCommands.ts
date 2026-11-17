@@ -16,6 +16,9 @@ export const USER_INPUT_OPTION_COMMANDS = [
 export type HardwareKeyboardCommand =
   | ThreadJumpKeybindingCommand
   | (typeof USER_INPUT_OPTION_COMMANDS)[number]
+  | "userInputNextQuestion"
+  | "userInputPreviousQuestion"
+  | "userInputSubmit"
   | "commandPalette"
   | "paletteNext"
   | "palettePrevious"
@@ -48,7 +51,12 @@ export function hasReceivedHardwareKeyboardCommand(): boolean {
   return receivedHardwareKeyboardCommand;
 }
 const registrationListeners = new Set<() => void>();
-let registrationVersion = 0;
+let registeredCommands: ReadonlySet<HardwareKeyboardCommand> = new Set();
+
+function publishRegistrations() {
+  registeredCommands = new Set(handlers.keys());
+  registrationListeners.forEach((listener) => listener());
+}
 
 export function useHardwareKeyboardCommand(
   command: HardwareKeyboardCommand | ReadonlyArray<HardwareKeyboardCommand>,
@@ -67,26 +75,21 @@ export function useHardwareKeyboardCommand(
       commandHandlers.add(handler);
       handlers.set(command, commandHandlers);
     }
-    registrationVersion += 1;
-    registrationListeners.forEach((listener) => listener());
+    publishRegistrations();
     return () => {
       for (const command of commands) {
         const commandHandlers = handlers.get(command);
         commandHandlers?.delete(handler);
         if (commandHandlers?.size === 0) handlers.delete(command);
       }
-      registrationVersion += 1;
-      registrationListeners.forEach((listener) => listener());
+      publishRegistrations();
     };
   }, [commandKey]);
 }
 
+/** A new set only when registrations change, so it can be a `useSyncExternalStore` snapshot. */
 export function getRegisteredHardwareKeyboardCommands(): ReadonlySet<HardwareKeyboardCommand> {
-  return new Set(handlers.keys());
-}
-
-export function getHardwareKeyboardCommandRegistrationVersion(): number {
-  return registrationVersion;
+  return registeredCommands;
 }
 
 export function subscribeToHardwareKeyboardCommandRegistrations(listener: () => void): () => void {

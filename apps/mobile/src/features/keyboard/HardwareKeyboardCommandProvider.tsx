@@ -44,7 +44,6 @@ import { CommandPalette } from "./CommandPalette";
 import type { CommandPaletteItem } from "./commandPaletteItems";
 import {
   dispatchHardwareKeyboardCommand,
-  getHardwareKeyboardCommandRegistrationVersion,
   getRegisteredHardwareKeyboardCommands,
   markHardwareKeyboardCommandReceived,
   parseActiveThreadPath,
@@ -151,13 +150,13 @@ export function HardwareKeyboardCommandProvider({
     },
     [],
   );
-  const registrationVersion = useSyncExternalStore(
+  const registeredCommands = useSyncExternalStore(
     subscribeToHardwareKeyboardCommandRegistrations,
-    getHardwareKeyboardCommandRegistrationVersion,
-    getHardwareKeyboardCommandRegistrationVersion,
+    getRegisteredHardwareKeyboardCommands,
+    getRegisteredHardwareKeyboardCommands,
   );
   const enabledCommands = useMemo(() => {
-    const commands = new Set<HardwareKeyboardCommand>(getRegisteredHardwareKeyboardCommands());
+    const commands = new Set<HardwareKeyboardCommand>(registeredCommands);
     commands.add("newTask");
     commands.add("commandPalette");
     if (pathname !== "/" && !pathname.startsWith("/threads/")) {
@@ -178,8 +177,7 @@ export function HardwareKeyboardCommandProvider({
       }
     }
     return [...commands];
-    // oxlint-disable-next-line react/memo-dependencies -- registrationVersion invalidates the snapshot of the external keyboard-command registry.
-  }, [activeThreadRef, canSnoozeActiveThread, pathname, registrationVersion, navigation]);
+  }, [activeThreadRef, canSnoozeActiveThread, pathname, registeredCommands, navigation]);
 
   const onCommand = useCallback(
     (command: HardwareKeyboardCommand) => {

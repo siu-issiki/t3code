@@ -4,7 +4,7 @@ import { describe, expect, it } from "vite-plus/test";
 
 import {
   dispatchHardwareKeyboardCommand,
-  getHardwareKeyboardCommandRegistrationVersion,
+  getRegisteredHardwareKeyboardCommands,
   parseActiveThreadPath,
   useHardwareKeyboardCommand,
 } from "./hardwareKeyboardCommands";
@@ -33,10 +33,10 @@ describe("useHardwareKeyboardCommand", () => {
     }
     const root = createRoot(document.createElement("div"));
     act(() => root.render(createElement(Shortcut, { label: "first" })));
-    const version = getHardwareKeyboardCommandRegistrationVersion();
+    const registered = getRegisteredHardwareKeyboardCommands();
 
     act(() => root.render(createElement(Shortcut, { label: "second" })));
-    expect(getHardwareKeyboardCommandRegistrationVersion()).toBe(version);
+    expect(getRegisteredHardwareKeyboardCommands()).toBe(registered);
     expect(dispatchHardwareKeyboardCommand("thread.jump.1")).toBe(true);
     expect(received).toEqual(["second"]);
 
