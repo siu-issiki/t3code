@@ -82,6 +82,7 @@ public final class T3KeyboardCommandsView: ExpoView {
     // so "/", Tab and digits still type everywhere they should.
     if !(window?.t3FirstResponder is UIKeyInput) {
       commands += [
+        enabledCommand("userInputSubmit", input: "\r", modifiers: [], action: #selector(submitUserInput), title: "Submit Answers"),
         enabledCommand("userInputNextQuestion", input: "\t", modifiers: [], action: #selector(nextUserInputQuestion), title: "Next Question"),
         enabledCommand(
           "userInputPreviousQuestion",
