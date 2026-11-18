@@ -73,8 +73,8 @@ public final class T3KeyboardCommandsView: ExpoView {
         action: #selector(settleThread),
         title: "Settle or Un-settle Thread"
       ),
-      enabledCommand("snoozeThread", input: "s", modifiers: .command, action: #selector(snoozeThread), title: "Snooze Thread"),
-      enabledCommand("toggleSidebar", input: "b", modifiers: .command, action: #selector(handleToggleSidebar), title: "Toggle Sidebar"),
+      enabledCommand("snoozeThread", input: "b", modifiers: .command, action: #selector(snoozeThread), title: "Snooze Thread"),
+      enabledCommand("toggleSidebar", input: "s", modifiers: .command, action: #selector(handleToggleSidebar), title: "Toggle Sidebar"),
       enabledCommand("cycleHost", input: "h", modifiers: [.command, .shift], action: #selector(cycleHost), title: "Next Machine"),
       enabledCommand("userInputSubmit", input: "\r", modifiers: .command, action: #selector(submitUserInput), title: "Submit Answers"),
     ].compactMap { $0 }
