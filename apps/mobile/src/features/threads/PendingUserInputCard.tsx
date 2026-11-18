@@ -32,10 +32,12 @@ import {
 } from "../files/filePath";
 import { useLiveThreadLinkLabels } from "../../state/entities";
 import {
+  hasReceivedHardwareKeyboardCommand,
   USER_INPUT_OPTION_COMMANDS,
   useHardwareKeyboardCommand,
   type HardwareKeyboardCommand,
 } from "../keyboard/hardwareKeyboardCommands";
+import { isHardwareKeyboardConnected } from "../../native/T3KeyboardCommands";
 import {
   activeUserInputQuestion,
   nextUnansweredUserInputQuestion,
@@ -160,6 +162,8 @@ export function PendingUserInputCard(props: PendingUserInputCardProps) {
     if (question) showQuestion(question.id);
   };
   const inputDisabled = responseDisabled || props.collapsed || !props.canOperateThread;
+  const showOptionKeys =
+    !inputDisabled && (hasReceivedHardwareKeyboardCommand() || isHardwareKeyboardConnected());
   const selectOption = (question: ThreadUserInputQuestion, value: string) => {
     // Pin the question, or answering it would swap the page to the next unanswered one at once.
     showQuestion(question.id);
@@ -358,7 +362,7 @@ export function PendingUserInputCard(props: PendingUserInputCardProps) {
               preserveSoftBreaks
             />
             <View className="gap-2">
-              {activeQuestion.options.map((option) => {
+              {activeQuestion.options.map((option, index) => {
                 const optionValue = option.value ?? option.label.trim();
                 const selected = isPendingUserInputOptionSelected(
                   activeQuestion,
@@ -374,7 +378,7 @@ export function PendingUserInputCard(props: PendingUserInputCardProps) {
                       accessibilityState={{ checked: selected, disabled: responseDisabled }}
                       disabled={responseDisabled}
                       className={cn(
-                        "min-h-12 w-full rounded-2xl border px-3.5 py-3",
+                        "min-h-12 w-full flex-row items-start gap-3 rounded-2xl border px-3.5 py-3",
                         selected ? "border-primary bg-primary/10" : "border-border bg-input",
                       )}
                       onPress={() => selectOption(activeQuestion, optionValue)}
@@ -398,6 +402,11 @@ export function PendingUserInputCard(props: PendingUserInputCardProps) {
                           </Text>
                         ) : null}
                       </View>
+                      {showOptionKeys && index < USER_INPUT_OPTION_COMMANDS.length ? (
+                        <Text className="font-sans text-sm tabular-nums text-foreground-muted">
+                          {index + 1}
+                        </Text>
+                      ) : null}
                     </Pressable>
                     {option.preview ? (
                       <View className="px-3.5">
