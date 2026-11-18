@@ -23,6 +23,8 @@ export interface CommandPaletteItem {
   readonly threadSearch?: ThreadSearchSubject;
   /** Listed last in its group, as the thread already open. */
   readonly secondary?: boolean;
+  /** Runs inside the palette, which stays open, as a step into a submenu. */
+  readonly stayOpen?: boolean;
   readonly run: () => void;
 }
 
@@ -101,6 +103,17 @@ export function filterCommandPaletteItems(
     return item && !listed.has(key) ? [{ ...item, fromMessages: true }] : [];
   });
   return [...ranked, ...fromMessages];
+}
+
+/** Projects a new thread can start in, pinned first, as the palette lists them. */
+export function newThreadProjects(
+  projects: ReadonlyArray<EnvironmentProject>,
+): ReadonlyArray<EnvironmentProject> {
+  const open = projects.filter((project) => project.archivedAt == null && !project.isScratch);
+  return [
+    ...open.filter((project) => project.pinnedAt != null),
+    ...open.filter((project) => project.pinnedAt == null),
+  ];
 }
 
 export function nextPaletteIndex(index: number, direction: -1 | 1, count: number) {

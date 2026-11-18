@@ -31,6 +31,8 @@ import {
   workspaceHasColumns,
 } from "../layout/workspace/workspace-selection-store";
 import { T3KeyboardCommands } from "../../native/T3KeyboardCommands";
+import { appAtomRegistry } from "../../state/atom-registry";
+import { environmentProjects } from "../../state/projects";
 import { useServerConfigs, useThreadShell } from "../../state/entities";
 import { useEnvironmentScope } from "../../state/session";
 import type { GitActionProgress } from "../../state/use-vcs-action-state";
@@ -40,8 +42,8 @@ import {
   resolveThreadListV2SnoozeGateExpiryMs,
   resolveThreadListV2SnoozeMenuSelection,
 } from "../threads/threadListV2";
-import { CommandPalette } from "./CommandPalette";
-import type { CommandPaletteItem } from "./commandPaletteItems";
+import { CommandPalette, type CommandPaletteMenu } from "./CommandPalette";
+import { newThreadProjects, type CommandPaletteItem } from "./commandPaletteItems";
 import {
   dispatchHardwareKeyboardCommand,
   getRegisteredHardwareKeyboardCommands,
@@ -61,11 +63,14 @@ const COPY_FEEDBACK_DISMISS_MS = 3_000;
 
 const CommandPaletteContext = createContext<ReactNode>(null);
 
-interface SnoozeMenu {
-  readonly thread: EnvironmentThreadShell;
-  readonly shown: ReadonlyArray<SnoozePreset>;
-  readonly presets: ReadonlyArray<SnoozePresetSetting> | undefined;
-}
+type PaletteMenu =
+  | {
+      readonly kind: "snooze";
+      readonly thread: EnvironmentThreadShell;
+      readonly shown: ReadonlyArray<SnoozePreset>;
+      readonly presets: ReadonlyArray<SnoozePresetSetting> | undefined;
+    }
+  | { readonly kind: "newThreadIn" };
 
 /** Render inside the workspace so palette actions share its navigation and pane state. */
 export function HardwareKeyboardCommandOverlay() {
@@ -78,11 +83,11 @@ export function HardwareKeyboardCommandProvider({
 }: PropsWithChildren<{ readonly pathname: string }>) {
   const navigation = useNavigation();
   const [paletteOpen, setPaletteOpen] = useState(false);
-  const [snoozeMenu, setSnoozeMenu] = useState<SnoozeMenu | null>(null);
+  const [menu, setMenu] = useState<PaletteMenu | null>(null);
   const [customSnoozeThread, setCustomSnoozeThread] = useState<EnvironmentThreadShell | null>(null);
   const closePalette = useCallback(() => {
     setPaletteOpen(false);
-    setSnoozeMenu(null);
+    setMenu(null);
   }, []);
   const activeThreadRef = useMemo(() => parseActiveThreadPath(pathname), [pathname]);
   const activeThread = useThreadShell(activeThreadRef);
@@ -220,7 +225,8 @@ export function HardwareKeyboardCommandProvider({
 
       if (command === "snoozeThread") {
         if (activeThread === null) return;
-        setSnoozeMenu({
+        setMenu({
+          kind: "snooze",
           thread: activeThread,
           shown: resolveSnoozePresets(
             new Date(),
@@ -232,7 +238,12 @@ export function HardwareKeyboardCommandProvider({
       }
 
       if (command === "newTask") {
-        navigation.dispatch(selectWorkspaceDetail({ name: "Thread", params: { draft: {} } }));
+        // As on web: pick a project first unless there is only one to start in.
+        if (newThreadProjects(appAtomRegistry.get(environmentProjects.projectsAtom)).length > 1) {
+          setMenu({ kind: "newThreadIn" });
+        } else {
+          navigation.dispatch(selectWorkspaceDetail({ name: "Thread", params: { draft: {} } }));
+        }
         return;
       }
       if (command === "back") {
@@ -271,10 +282,11 @@ export function HardwareKeyboardCommandProvider({
     ],
   );
 
-  const snoozeItems = useMemo<ReadonlyArray<CommandPaletteItem> | undefined>(() => {
-    if (snoozeMenu === null) return undefined;
-    const { thread, shown, presets } = snoozeMenu;
-    return [
+  const paletteMenu = useMemo<CommandPaletteMenu | undefined>(() => {
+    if (menu === null) return undefined;
+    if (menu.kind === "newThreadIn") return menu;
+    const { thread, shown, presets } = menu;
+    const items: ReadonlyArray<CommandPaletteItem> = [
       ...shown.map((preset): CommandPaletteItem => ({
         key: `snooze:${preset.id}`,
         kind: "action",
@@ -306,17 +318,18 @@ export function HardwareKeyboardCommandProvider({
         run: () => setCustomSnoozeThread(thread),
       },
     ];
-  }, [snoozeMenu, snoozeThread]);
+    return { kind: "snooze", items };
+  }, [menu, snoozeThread]);
 
   const palette = useMemo(
     () => (
       <>
-        {paletteOpen || snoozeItems ? (
+        {paletteOpen || paletteMenu ? (
           <CommandPalette
             pathname={pathname}
             onClose={closePalette}
             onCommand={onCommand}
-            snoozeItems={snoozeItems}
+            menu={paletteMenu}
           />
         ) : null}
         {customSnoozeThread ? (
@@ -327,7 +340,7 @@ export function HardwareKeyboardCommandProvider({
         ) : null}
       </>
     ),
-    [closePalette, customSnoozeThread, onCommand, paletteOpen, pathname, snoozeItems, snoozeThread],
+    [closePalette, customSnoozeThread, onCommand, paletteMenu, paletteOpen, pathname, snoozeThread],
   );
 
   return (

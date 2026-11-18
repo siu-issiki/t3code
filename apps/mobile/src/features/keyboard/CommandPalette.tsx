@@ -9,6 +9,11 @@ import {
   type EnvironmentThreadSearchMatch,
   type ShownOrder,
 } from "@t3tools/client-runtime/state/thread-search";
+import {
+  isAtomCommandInterrupted,
+  squashAtomCommandFailure,
+} from "@t3tools/client-runtime/state/runtime";
+import type { EnvironmentProject } from "@t3tools/client-runtime/state/shell";
 import { isShownUnderParent } from "@t3tools/client-runtime/state/threads";
 import { THREAD_JUMP_KEYBINDING_COMMANDS } from "@t3tools/contracts";
 import {
@@ -34,6 +39,7 @@ import {
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 
 import { ProjectFavicon } from "../../components/ProjectFavicon";
+import * as Dialog from "../../components/ui/Dialog";
 import { GlassSurface } from "../../components/ui/GlassSurface";
 import { RowPressable } from "../../components/ui/RowPressable";
 import { AppText as Text } from "../../components/ui/AppText";
@@ -50,6 +56,7 @@ import {
   useThreadShell,
   useVisibleThreadShells,
 } from "../../state/entities";
+import { projectEnvironment } from "../../state/projects";
 import { useThreadSearch } from "../../state/queries";
 import { requestThreadMessageJump } from "../threads/threadMessageJump";
 import { threadEnvironment } from "../../state/threads";
@@ -63,8 +70,10 @@ import { pickTriageEnvironment } from "../triage/triageTarget";
 import { useStartTriage } from "../triage/useStartTriage";
 import { useNewTaskFlow } from "../threads/new-task-flow-provider";
 import { useActiveNewTask } from "../../state/active-new-task";
+import { resolveNewTaskScratchOption } from "../threads/new-task-project-selection";
 import {
   filterCommandPaletteItems,
+  newThreadProjects,
   nextPaletteIndex,
   type CommandPaletteItem,
   type CommandPaletteResult,
@@ -102,14 +111,41 @@ const ACTION_ICONS: Record<string, AppSymbolName> = {
   copyThreadReference: "link",
 };
 
-function itemIcon(item: CommandPaletteItem): AppSymbolName {
+/** Replaces the palette's list with one menu's rows. */
+export type CommandPaletteMenu =
+  | { readonly kind: "snooze"; readonly items: ReadonlyArray<CommandPaletteItem> }
+  | { readonly kind: "newThreadIn" };
+
+const MENU_COPY: Record<
+  CommandPaletteMenu["kind"],
+  {
+    readonly placeholder: string;
+    readonly accessibilityLabel: string;
+    readonly icon: AppSymbolName;
+  }
+> = {
+  snooze: {
+    placeholder: "Snooze until…",
+    accessibilityLabel: "Snooze thread until",
+    icon: "alarm",
+  },
+  newThreadIn: {
+    placeholder: "New thread in…",
+    accessibilityLabel: "Choose a project for the new thread",
+    icon: "square.and.pencil",
+  },
+};
+
+const NEW_THREAD_IN_MENU: CommandPaletteMenu = { kind: "newThreadIn" };
+
+function itemIcon(item: CommandPaletteItem, menuIcon: AppSymbolName | undefined): AppSymbolName {
   if (item.kind === "thread") return "text.bubble";
-  if (item.key.startsWith("snooze:")) return "alarm";
-  return ACTION_ICONS[item.key] ?? "ellipsis";
+  return menuIcon ?? ACTION_ICONS[item.key] ?? "ellipsis";
 }
 
 function PaletteRow(props: {
   readonly item: CommandPaletteResult;
+  readonly menuIcon: AppSymbolName | undefined;
   readonly index: number;
   readonly selected: boolean;
   readonly searchMatch?: EnvironmentThreadSearchMatch;
@@ -147,7 +183,7 @@ function PaletteRow(props: {
           />
         ) : (
           <SymbolView
-            name={itemIcon(props.item)}
+            name={itemIcon(props.item, props.menuIcon)}
             size={20}
             tintColorClassName={
               props.selected ? "accent-thread-selected-foreground" : "accent-icon"
@@ -222,8 +258,7 @@ export function CommandPalette(props: {
   readonly pathname: string;
   readonly onClose: () => void;
   readonly onCommand: (command: HardwareKeyboardCommand) => void;
-  /** Lists only these rows, as the snooze picker. */
-  readonly snoozeItems?: ReadonlyArray<CommandPaletteItem>;
+  readonly menu?: CommandPaletteMenu;
 }) {
   const navigation = useNavigation();
   const selectTab = useSelectWorkspaceTab();
@@ -239,6 +274,10 @@ export function CommandPalette(props: {
   const environments = useWorkspaceEnvironments();
   const { savedConnectionsById } = useSavedRemoteConnections();
   const [query, setQuery] = useState("");
+  // "New thread in…" switches the open palette to the project picker instead of closing it.
+  const [pickingProject, setPickingProject] = useState(false);
+  const menu = pickingProject ? NEW_THREAD_IN_MENU : props.menu;
+  const menuCopy = menu ? MENU_COPY[menu.kind] : undefined;
   // Ranking is relative to when the palette opened, so rows do not reorder as time passes.
   const [now] = useState(() => Date.now());
   const [selection, setSelection] = useState<string | null>(null);
@@ -269,7 +308,7 @@ export function CommandPalette(props: {
         )
       : undefined;
   const search = useThreadSearch(
-    props.snoozeItems ? [] : searchEnvironmentIds,
+    menu ? [] : searchEnvironmentIds,
     query.startsWith(">") ? "" : query,
     environmentLabels === undefined ? {} : { environmentLabels },
   );
@@ -289,20 +328,92 @@ export function CommandPalette(props: {
     useAtomValue(serverEnvironment.prepareTriage.permissionAtom(triageEnvironmentId)) &&
     triageEnvironmentId !== null &&
     serverConfigs.get(triageEnvironmentId)?.environment.capabilities.triage === true;
+  const openScratch = useAtomCommand(projectEnvironment.openScratch, { reportFailure: false });
+  const scratchOption = resolveNewTaskScratchOption({
+    environments,
+    serverConfigs,
+    selectedEnvironmentId: activeThreadRef?.environmentId ?? draftEnvironmentId,
+  });
+  const scratchEnvironmentId = scratchOption?.ready ? scratchOption.environmentId : null;
   const contentMatchByKey = new Map(
     search.matches
       .filter((match) => match.source === "user" || match.source === "assistant")
       .map((match) => [scopedThreadKey(match.environmentId, match.threadId), match]),
   );
   const items = useMemo(() => {
-    if (props.snoozeItems) return props.snoozeItems;
+    if (menu?.kind === "snooze") return menu.items;
+    const startDraft = (project: EnvironmentProject) =>
+      selectDetail({
+        name: "Thread",
+        params: {
+          draft: {
+            requestId: uuidv4(),
+            environmentId: project.environmentId,
+            projectId: project.id,
+            title: project.title,
+          },
+        },
+      });
+    const openProjects = newThreadProjects(projects);
+    const projectItems: CommandPaletteItem[] = openProjects.map((project) => ({
+      key: `project:${scopedProjectKey(project.environmentId, project.id)}`,
+      kind: "project",
+      project,
+      title: project.title,
+      detail: `New thread · ${savedConnectionsById[project.environmentId]?.environmentLabel ?? project.environmentId}`,
+      searchTerms: [project.workspaceRoot, "new thread", "project"],
+      run: () => startDraft(project),
+    }));
+    if (menu?.kind === "newThreadIn") {
+      if (scratchEnvironmentId === null) return projectItems;
+      // As on web: after the pinned projects and the first other one.
+      const noProjectIndex = Math.min(
+        openProjects.filter((project) => project.pinnedAt != null).length + 1,
+        projectItems.length,
+      );
+      const noProject: CommandPaletteItem = {
+        key: "newThreadNoProject",
+        kind: "action",
+        title: "No project",
+        searchTerms: ["no project", "without project", "none"],
+        run: () =>
+          void openScratch({ environmentId: scratchEnvironmentId, input: {} }).then((result) => {
+            if (result._tag === "Success") {
+              startDraft(result.value);
+            } else if (!isAtomCommandInterrupted(result)) {
+              const error = squashAtomCommandFailure(result);
+              Dialog.alert(
+                "Could not start without a project",
+                error instanceof Error
+                  ? error.message
+                  : "The folder for threads without a project could not be created.",
+              );
+            }
+          }),
+      };
+      return [
+        ...projectItems.slice(0, noProjectIndex),
+        noProject,
+        ...projectItems.slice(noProjectIndex),
+      ];
+    }
     const actions: CommandPaletteItem[] = [
       {
         key: "newTask",
         kind: "action",
         title: "New thread in…",
         searchTerms: ["new task", "chat", "create", "project"],
-        run: () => runCommand("newTask"),
+        // With one project or none there is nothing to pick, as with ⌘N.
+        ...(openProjects.length > 1
+          ? {
+              stayOpen: true,
+              run: () => {
+                setPickingProject(true);
+                setQuery("");
+                setSelection(null);
+              },
+            }
+          : { run: () => runCommand("newTask") }),
       },
       {
         key: "addProject",
@@ -377,18 +488,7 @@ export function CommandPalette(props: {
         kind: "action",
         title: `New thread in ${activeProject.title}`,
         searchTerms: ["new task", "chat", "create"],
-        run: () =>
-          selectDetail({
-            name: "Thread",
-            params: {
-              draft: {
-                requestId: uuidv4(),
-                environmentId: activeProject.environmentId,
-                projectId: activeProject.id,
-                title: activeProject.title,
-              },
-            },
-          }),
+        run: () => startDraft(activeProject),
       });
     }
     if (activeThreadRef) {
@@ -408,30 +508,6 @@ export function CommandPalette(props: {
         })),
       );
     }
-    const openProjects = projects.filter((project) => project.archivedAt == null);
-    const projectItems: CommandPaletteItem[] = [
-      ...openProjects.filter((project) => project.pinnedAt != null),
-      ...openProjects.filter((project) => project.pinnedAt == null),
-    ].map((project) => ({
-      key: `project:${scopedProjectKey(project.environmentId, project.id)}`,
-      kind: "project",
-      project,
-      title: project.title,
-      detail: `New thread · ${savedConnectionsById[project.environmentId]?.environmentLabel ?? project.environmentId}`,
-      searchTerms: [project.workspaceRoot, "new thread", "project"],
-      run: () =>
-        selectDetail({
-          name: "Thread",
-          params: {
-            draft: {
-              requestId: uuidv4(),
-              environmentId: project.environmentId,
-              projectId: project.id,
-              title: project.title,
-            },
-          },
-        }),
-    }));
     const threadItems: CommandPaletteItem[] = threads
       .filter(
         (thread) =>
@@ -476,7 +552,9 @@ export function CommandPalette(props: {
     );
     return [...actions, ...projectItems, ...threadItems];
   }, [
-    props.snoozeItems,
+    menu,
+    openScratch,
+    scratchEnvironmentId,
     selectTab,
     activeThread,
     activeThreadRef,
@@ -519,14 +597,16 @@ export function CommandPalette(props: {
     () => messageOrder.keys.slice(0, messageOrder.shown),
     [messageOrder.keys, messageOrder.shown],
   );
-  const results = useMemo(() => {
+  const results = useMemo((): ReadonlyArray<CommandPaletteResult> => {
+    // A menu lists all its rows before a query, projects included.
+    if (menu && !query.trim()) return items;
     const ranked = filterCommandPaletteItems(items, query, messageMatchKeys, now);
     // Recent threads leave out the open one, which would always lead them.
     const activeKey = activeThread
       ? scopedThreadKey(activeThread.environmentId, activeThread.id)
       : null;
     return query.trim() ? ranked : ranked.filter((item) => item.key !== activeKey);
-  }, [activeThread, items, messageMatchKeys, now, query]);
+  }, [activeThread, items, menu, messageMatchKeys, now, query]);
   const runResult = (item: CommandPaletteResult) => {
     const thread =
       item.kind === "thread" && query.trim() && !query.startsWith(">")
@@ -553,6 +633,8 @@ export function CommandPalette(props: {
     }
     item.run();
   };
+  const pick = (item: CommandPaletteResult) =>
+    item.stayOpen ? runResult(item) : close(() => runResult(item));
   const firstMessageIndex = results.findIndex((item) => item.fromMessages);
   const selectedIndex = Math.max(
     0,
@@ -610,7 +692,7 @@ export function CommandPalette(props: {
       );
     } else {
       const item = results[threadJumpIndex(command)];
-      if (item) close(() => runResult(item));
+      if (item) pick(item);
     }
   }
 
@@ -657,15 +739,9 @@ export function CommandPalette(props: {
                   <TextInput
                     ref={inputRef}
                     accessibilityLabel={
-                      props.snoozeItems
-                        ? "Snooze thread until"
-                        : "Search commands, projects, and threads"
+                      menuCopy?.accessibilityLabel ?? "Search commands, projects, and threads"
                     }
-                    placeholder={
-                      props.snoozeItems
-                        ? "Snooze until…"
-                        : "Search commands, projects, and threads…"
-                    }
+                    placeholder={menuCopy?.placeholder ?? "Search commands, projects, and threads…"}
                     placeholderTextColorClassName="accent-placeholder"
                     autoCorrect={false}
                     autoCapitalize="none"
@@ -683,7 +759,7 @@ export function CommandPalette(props: {
                     submitBehavior="submit"
                     onSubmitEditing={() => {
                       const item = results[selectedIndex];
-                      if (item) close(() => runResult(item));
+                      if (item) pick(item);
                     }}
                   />
                 </View>
@@ -738,7 +814,8 @@ export function CommandPalette(props: {
                       selected={item.key === selectedKey}
                       searchMatch={item.fromMessages ? contentMatchByKey.get(item.key) : undefined}
                       searchQuery={search.query}
-                      onSelect={() => close(() => runResult(item))}
+                      menuIcon={menuCopy?.icon}
+                      onSelect={() => pick(item)}
                     />
                   </>
                 )}

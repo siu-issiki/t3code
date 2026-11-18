@@ -69,6 +69,7 @@ import {
   parseActiveThreadPath,
   useHardwareKeyboardCommand,
 } from "../keyboard/hardwareKeyboardCommands";
+import { newThreadProjects } from "../keyboard/commandPaletteItems";
 import { useAndroidControlSizing } from "../../components/ui/useAndroidControlSizing";
 import { useEnabledNavigationTabs } from "./workspace/navigation-tabs";
 import { FLOATING_TABS, floatingTabsMetrics } from "./workspace/floating-workspace-tabs";
@@ -647,6 +648,8 @@ function AdaptiveWorkspaceLayoutContent(
   };
 
   useHardwareKeyboardCommand("newTask", () => {
+    // With several projects the keyboard provider asks which one first, as on web.
+    if (newThreadProjects(projects).length > 1) return false;
     handleStartNewTask();
     return true;
   });
